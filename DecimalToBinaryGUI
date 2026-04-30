@@ -1,0 +1,32 @@
+import javax.swing.*;
+
+public class DecimalToBinaryGUI {
+    public static void main(String[] args) {
+        JFrame frame = new JFrame("Decimal -> Binary");
+        JTextField dec = new JTextField();
+        JLabel bin = new JLabel("Binary: ");
+        JButton btn = new JButton("Convert");
+
+        btn.addActionListener(e -> {
+            try {
+                int n = Integer.parseInt(dec.getText().trim());
+                bin.setText("Binary: " + Integer.toBinaryString(n));
+            } catch (Exception ex) {
+                bin.setText("Binary: Invalid number");
+            }
+        });
+
+        frame.setLayout(null);
+        dec.setBounds(20, 20, 200, 25);
+        btn.setBounds(20, 55, 200, 25);
+        bin.setBounds(20, 90, 250, 25);
+
+        frame.add(dec);
+        frame.add(btn);
+        frame.add(bin);
+
+        frame.setSize(280, 170);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setVisible(true);
+    }
+}
