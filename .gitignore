@@ -1,0 +1,9 @@
+# Compiled Java class files
+*.class
+
+# Package and build output
+*.jar
+*.war
+*.ear
+out/
+build/
