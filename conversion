@@ -1,6 +1,6 @@
 import java.util.Scanner;
 
-public class convertion {
+public class conversion {
 
     // Convert to Decimal
     public static int toDecimal(String number, int fromBase) {
