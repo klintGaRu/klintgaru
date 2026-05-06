@@ -1,0 +1,141 @@
+import java.util.Scanner;
+
+public class NumberSystemConverter {
+
+    // Convert to Decimal
+    public static int toDecimal(String number, int fromBase) {
+        int decimal = 0;
+        for (char digit : number.toCharArray()) {
+            int digitValue = Character.digit(digit, fromBase);
+            decimal = decimal * fromBase + digitValue;
+        }
+        return decimal;
+    }
+    
+    // Convert from Decimal to another base
+    public static String fromDecimal(int decimal, int toBase) {
+        if (decimal == 0) return "0";
+        
+        String result = "";
+        while (decimal > 0) {
+            int remainder = decimal % toBase;
+            if (remainder < 10) {
+                result = remainder + result;
+            } else {
+                result = (char)('A' + remainder - 10) + result;
+            }
+            decimal = decimal / toBase;
+        }
+        return result;
+    }
+    
+    // Check if number is valid for the base
+    public static boolean isValid(String number, int base) {
+        for (char c : number.toCharArray()) {
+            if (Character.digit(c, base) == -1) {
+                return false;
+            }
+        }
+        return number.length() > 0;
+    }
+
+    // Get base number from user choice (1-4)
+    public static int getBaseFromChoice(int choice) {
+        if (choice == 1) return 2;
+        else if (choice == 2) return 8;
+        else if (choice == 3) return 10;
+        else if (choice == 4) return 16;
+        else return -1;
+    }
+
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        boolean continueConvert = true;
+
+        while (continueConvert) {
+            System.out.println("\n=== Number System Converter ===");
+            System.out.println("1. Convert number");
+            System.out.println("2. Exit");
+            System.out.print("Choose option (1-2): ");
+
+            // Menu selection
+            String menuChoice = sc.nextLine().trim();
+            if (menuChoice.equals("2")) {
+                continueConvert = false;
+                continue;
+            } else if (!menuChoice.equals("1")) {
+                System.out.println("Invalid choice! Please enter 1 or 2.");
+                continue;
+            }
+
+            System.out.println("Choose source base: \n1=Binary \n2=Octal \n3=Decimal \n4=Hexadecimal");
+
+            // ...existing code...
+            // RETRY LOOP: Source base selection
+            int sourceBase = -1;
+            while (sourceBase == -1) {
+                System.out.print("Enter choice (1-4): ");
+                try {
+                    int sourceChoice = sc.nextInt();
+                    sc.nextLine();
+                    sourceBase = getBaseFromChoice(sourceChoice);
+                    if (sourceBase == -1) {
+                        System.out.println("Invalid choice! Please enter 1, 2, 3, or 4.");
+                    }
+                } catch (Exception e) {
+                    sc.nextLine();
+                    System.out.println("Invalid input! Please enter a number between 1 and 4.");
+                }
+            }
+
+            // RETRY LOOP: User number input
+            String number = "";
+            boolean validNumber = false;
+            while (!validNumber) {
+                System.out.print("Enter your number: ");
+                number = sc.nextLine().trim().toUpperCase();
+
+                if (number.isEmpty()) {
+                    System.out.println("Error: Number cannot be empty!");
+                    continue;
+                }
+
+                if (!isValid(number, sourceBase)) {
+                    System.out.println("Error: Invalid number for base " + sourceBase + "! Please try again.");
+                    continue;
+                }
+
+                validNumber = true;
+            }
+
+            System.out.println("Choose target base: \n1=Binary \n2=Octal \n3=Decimal \n4=Hexadecimal");
+
+            // RETRY LOOP: Target base selection
+            int targetBase = -1;
+            while (targetBase == -1) {
+                System.out.print("Enter choice (1-4): ");
+                try {
+                    int targetChoice = sc.nextInt();
+                    sc.nextLine();
+                    targetBase = getBaseFromChoice(targetChoice);
+                    if (targetBase == -1) {
+                        System.out.println("Invalid choice! Please enter 1, 2, 3, or 4.");
+                    }
+                } catch (Exception e) {
+                    sc.nextLine();
+                    System.out.println("Invalid input! Please enter a number between 1 and 4.");
+                }
+            }
+
+            // Convert and display result
+            int decimalValue = toDecimal(number, sourceBase);
+            String result = fromDecimal(decimalValue, targetBase);
+
+            System.out.println("\n=== Result ===");
+            System.out.println(number + " (Base " + sourceBase + ") = " + result + " (Base " + targetBase + ")");
+        }
+
+        System.out.println("\nThank you for using Number System Converter!");
+        sc.close();
+    }
+}
