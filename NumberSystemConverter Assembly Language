@@ -1,7 +1,10 @@
-org 100h
-jmp start
+org 100h           ; .COM program start (IP = 0100h)
 
-; -------------------- MESSAGES --------------------
+jmp start          ; skip data to code
+
+; -----------------------------------------------------------------------
+; Messages and user-facing strings ($-terminated for INT 21h AH=09)
+; -----------------------------------------------------------------------
 msgMenu     db 13,10,'=== Converter ===',13,10
             db '1. Decimal to Binary',13,10
             db '2. Binary to Decimal',13,10
@@ -15,35 +18,50 @@ msgResult   db 13,10,'Result: $'
 msgThanks   db 13,10,'Goodbye!',13,10,'$'
 newline     db 13,10,'$'
 
-; DOS buffered input
-choiceBuf   db 3,0,3 dup(0)
-inputBuf    db 20,0,20 dup(0)
+; -----------------------------------------------------------------------
+; Input buffer for multi-character entries (used by INT 21h AH=0Ah)
+; Structure:
+;   byte 0 = maximum number of characters the buffer can hold
+;   byte 1 = DOS fills with actual length typed (not including CR)
+;   bytes 2.. = characters typed by the user
+; We set max to 20 so user can type multi-digit decimals or a binary string.
+; -----------------------------------------------------------------------
+inputBuf    db 20,0,20 dup(0)     ; DOS buffered input
 
-; output for binary text
-binBuf      db 17 dup(0)
-binLen      db 0
+; -----------------------------------------------------------------------
+; Internal working buffers / variables
+; -----------------------------------------------------------------------
+binBuf      db 17 dup(0)          ; will hold up to 16 binary chars (text)
+binLen      db 0                  ; number of chars placed in binBuf
+numberVal   dw 0                  ; stored conversion result (safe place)
+choiceChar  db 0                  ; store single menu keypress
 
-; IMPORTANT: keep conversion result safe here
-numberVal   dw 0
-
+; -----------------------------------------------------------------------
+; Code start: set DS and go to main menu
+; -----------------------------------------------------------------------
 start:
     mov ax, cs
-    mov ds, ax
+    mov ds, ax              ; data segment = code segment (COM program)
 
 mainMenu:
+    ; Print menu using INT 21h AH=09 ($-terminated string)
     lea dx, msgMenu
     mov ah, 09h
     int 21h
 
-    lea dx, choiceBuf
-    mov ah, 0Ah
+    ; Read a single keypress for choice (AH=01h). This does NOT provide
+    ; a full editable line; it's a single keystroke and it is echoed.
+    mov ah, 01h
     int 21h
+    mov [choiceChar], al    ; save the pressed key immediately
 
-    mov al, [choiceBuf+1]
-    cmp al, 1
-    jne badChoice
+    ; Flush any leftover characters (for example, the user presses Enter
+    ; after the key). We don't want the CR left in the input stream to be
+    ; read by the following buffered reads.
+    call flushInputLine
 
-    mov al, [choiceBuf+2]
+    ; Process the saved key
+    mov al, [choiceChar]
     cmp al, '1'
     je doDecToBin
     cmp al, '2'
@@ -51,34 +69,47 @@ mainMenu:
     cmp al, '3'
     je exitProgram
 
-badChoice:
+    ; Invalid choice: print message and return to menu
     lea dx, msgInvalid
     mov ah, 09h
     int 21h
     jmp mainMenu
 
-; -------------------- DECIMAL TO BINARY --------------------
+; -----------------------------------------------------------------------
+; Decimal -> Binary
+; - Read a buffered line (user types a decimal number)
+; - Parse into AX (0..65535). If success, save to `numberVal`
+; - Convert decimal value to text binary in `binBuf` and print
+; -----------------------------------------------------------------------
 doDecToBin:
     lea dx, msgDecIn
     mov ah, 09h
     int 21h
 
+    ; Buffered read (AH=0Ah)
     lea dx, inputBuf
     mov ah, 0Ah
     int 21h
 
+    ; Parse decimal string in inputBuf -> AX (CF=0 success, CF=1 fail)
     call parseDecimal
     jc showInvalid
 
-    mov [numberVal], ax        ; save result before any DOS print
+    ; Save parsed numeric value immediately to memory. Important because
+    ; further INT 21h printing calls can change registers (AX/DX).
+    mov [numberVal], ax
+
+    ; Convert the numeric value (AX) to ASCII binary string in binBuf
     mov ax, [numberVal]
     call decimalToBinaryText
 
+    ; Print the result label
     lea dx, msgResult
     mov ah, 09h
     int 21h
 
-    mov cl, [binLen]
+    ; Print binary characters individually using INT 21h AH=02 (DL holds char)
+    mov cl, [binLen]       ; number of characters
     xor ch, ch
     lea si, binBuf
 
@@ -93,12 +124,18 @@ printBinLoop:
     jmp printBinLoop
 
 donePrintBin:
+    ; print newline and return to menu
     lea dx, newline
     mov ah, 09h
     int 21h
     jmp mainMenu
 
-; -------------------- BINARY TO DECIMAL --------------------
+; -----------------------------------------------------------------------
+; Binary -> Decimal
+; - Read a buffered line (user types a binary string)
+; - Parse into AX (0..65535). If success, save to `numberVal`
+; - Print decimal form by restoring AX from `numberVal` and printing
+; -----------------------------------------------------------------------
 doBinToDec:
     lea dx, msgBinIn
     mov ah, 09h
@@ -108,16 +145,21 @@ doBinToDec:
     mov ah, 0Ah
     int 21h
 
+    ; Parse binary text into AX (CF=0 success, CF=1 fail)
     call parseBinary
     jc showInvalid
 
-    mov [numberVal], ax        ; save immediately (CRITICAL FIX)
+    ; Save parsed numeric result immediately to memory to avoid register
+    ; corruption by subsequent INT 21h calls.
+    mov [numberVal], ax
 
+    ; Print "Result:" label
     lea dx, msgResult
     mov ah, 09h
     int 21h
 
-    mov ax, [numberVal]        ; restore correct value
+    ; Restore numeric value and print as decimal
+    mov ax, [numberVal]
     call printAXDecimal
 
     lea dx, newline
@@ -126,6 +168,7 @@ doBinToDec:
     jmp mainMenu
 
 showInvalid:
+    ; Print generic invalid message and return to menu
     lea dx, msgInvalid
     mov ah, 09h
     int 21h
@@ -135,95 +178,135 @@ exitProgram:
     lea dx, msgThanks
     mov ah, 09h
     int 21h
-    mov ax, 4C00h
+    mov ax, 4C00h          ; terminate program (INT 21h AH=4Ch)
     int 21h
 
-; ============================================================
+; -----------------------------------------------------------------------
+; flushInputLine
+; - Ensures leftover characters (like CR) from the keyboard buffer are removed.
+; - Uses INT 21h AH=0Bh to check if characters are pending (non-blocking).
+; - If pending, reads them with AH=01 (immediate read) until CR (0x0D) is found.
+; - This routine does not block because AH=01 is only invoked when AH=0Bh
+;   indicated that characters exist.
+; -----------------------------------------------------------------------
+flushInputLine:
+.flush_check:
+    mov ah, 0Bh            ; check keyboard input status (non-blocking)
+    int 21h
+    cmp al, 0              ; AL==0 -> no characters pending
+    je .flush_done
+
+    ; There is at least one char pending: read and discard it
+    mov ah, 01h            ; read one char (echoed) without waiting because data available
+    int 21h
+    cmp al, 0Dh            ; stop when we read CR (Enter)
+    je .flush_done
+    jmp .flush_check
+
+.flush_done:
+    ret
+
+; -----------------------------------------------------------------------
 ; parseDecimal
-; OUT: AX=value, CF=0 success, CF=1 fail
-; ============================================================
+; - Read decimal ASCII from inputBuf and compute AX = value
+; - Checks: empty input, non-digit characters, overflow above 65535
+; - Algorithm: AX = AX*10 + digit with overflow checks at multiply and add
+; - On success: CF=0, AX contains value. On error: CF=1.
+; -----------------------------------------------------------------------
 parseDecimal:
-    xor ax, ax
-    mov cl, [inputBuf+1]
+    xor ax, ax                ; AX = 0 accumulator
+    mov cl, [inputBuf+1]      ; CL = length of typed input
     cmp cl, 0
-    je decFail
-    lea si, inputBuf+2
+    je decFail                ; empty => fail
+
+    lea si, inputBuf+2        ; SI points to first character
 
 decLoop:
-    mov bl, [si]
+    mov bl, [si]              ; BL = current char
     cmp bl, '0'
-    jb decFail
+    jb decFail                ; not a digit
     cmp bl, '9'
     ja decFail
-    sub bl, '0'
+    sub bl, '0'               ; BL = numerical digit 0..9
 
-    ; AX = AX*10 + BL
+    ; AX = AX * 10  (compute safely using shifts/adds)
     mov dx, ax
-    shl ax, 1
-    shl dx, 3
-    add ax, dx
-    jc decFail
-    xor bh, bh
-    add ax, bx
-    jc decFail
+    shl ax, 1                 ; AX = AX * 2
+    shl dx, 3                 ; DX = oldAX * 8
+    add ax, dx                ; AX = oldAX * 10
+    jc decFail                ; carry means overflow
+
+    xor bh, bh                ; ensure BX holds digit
+    add ax, bx                ; AX += digit
+    jc decFail                ; overflow check
 
     inc si
     dec cl
     jnz decLoop
 
-    clc
-    ret
-decFail:
-    stc
+    clc                       ; success (clear carry)
     ret
 
-; ============================================================
-; parseBinary (correct)
-; OUT: AX=value, CF=0 success, CF=1 fail
-; ============================================================
+decFail:
+    stc                       ; indicate failure by setting CF=1
+    ret
+
+; -----------------------------------------------------------------------
+; parseBinary
+; - Read binary ASCII string ('0'/'1') and compute AX = value
+; - Checks: empty input, invalid character, overflow beyond 16 bits
+; - Algorithm: For each bit, check overflow then AX = AX*2 (+1 if bit is 1)
+; - On success: CF=0 and AX contains result. On error: CF=1.
+; -----------------------------------------------------------------------
 parseBinary:
-    xor ax, ax
-    mov cl, [inputBuf+1]
+    xor ax, ax                ; AX = 0 accumulator
+    mov cl, [inputBuf+1]      ; CL = length
     cmp cl, 0
-    je binFail
+    je binFail                ; empty => fail
+
     lea si, inputBuf+2
 
 binLoop:
-    mov bl, [si]
+    mov bl, [si]              ; BL = current char
     cmp bl, '0'
     je bitZero
     cmp bl, '1'
     je bitOne
-    jmp binFail
+    jmp binFail               ; invalid char
 
 bitZero:
+    ; Overflow check BEFORE shift: if bit15 is already set, shifting left
+    ; will overflow a 16-bit unsigned value.
     test ax, 8000h
     jnz binFail
-    shl ax, 1
+    shl ax, 1                 ; AX *= 2
     jmp nextBit
 
 bitOne:
     test ax, 8000h
     jnz binFail
     shl ax, 1
-    or ax, 1
+    or ax, 1                  ; set least significant bit
 
 nextBit:
     inc si
     dec cl
     jnz binLoop
 
-    clc
-    ret
-binFail:
-    stc
+    clc                       ; success
     ret
 
-; ============================================================
+binFail:
+    stc                       ; indicate failure
+    ret
+
+; -----------------------------------------------------------------------
 ; decimalToBinaryText
-; IN: AX
-; OUT: binBuf + binLen
-; ============================================================
+; - Convert AX (0..65535) into ASCII binary text stored in binBuf
+; - If AX == 0, store single '0'. Otherwise repeatedly divide by 2,
+;   push remainders, then pop them to place MSB first into binBuf.
+; - binLen is updated to length (1..16).
+; -----------------------------------------------------------------------
 decimalToBinaryText:
     cmp ax, 0
     jne decNotZero
@@ -232,57 +315,60 @@ decimalToBinaryText:
     ret
 
 decNotZero:
-    xor cx, cx
+    xor cx, cx                ; CX = count of pushed bits
 
 revLoop:
     xor dx, dx
     mov bx, 2
-    div bx
-    push dx
+    div bx                    ; AX = quotient, DX = remainder (0/1)
+    push dx                   ; save remainder
     inc cx
     cmp ax, 0
     jne revLoop
 
+    ; Pop remainders into binBuf to get MSB..LSB order
     lea di, binBuf
 saveLoop:
     pop dx
-    add dl, '0'
+    add dl, '0'               ; convert 0/1 -> '0'/'1'
     mov [di], dl
     inc di
     loop saveLoop
 
+    ; binLen = number of characters written
     mov ax, di
     sub ax, offset binBuf
     mov [binLen], al
     ret
 
-; ============================================================
+; -----------------------------------------------------------------------
 ; printAXDecimal
-; IN: AX unsigned
-; ============================================================
+; - Print the unsigned 16-bit value in AX as a decimal string.
+; - Uses repeated division by 10; outputs digits with INT 21h AH=02 (DL).
+; -----------------------------------------------------------------------
 printAXDecimal:
     cmp ax, 0
     jne pDecStart
-    mov dl, '0'
+    mov dl, '0'               ; special case: AX==0 => print '0'
     mov ah, 02h
     int 21h
     ret
 
 pDecStart:
-    xor cx, cx
+    xor cx, cx                ; CX = number of digits pushed
 
 pDecLoop:
     xor dx, dx
     mov bx, 10
-    div bx
-    push dx
+    div bx                    ; AX = quotient, DX = remainder
+    push dx                   ; store remainder (digit)
     inc cx
     cmp ax, 0
     jne pDecLoop
 
 pDecPrint:
     pop dx
-    add dl, '0'
+    add dl, '0'               ; convert to ASCII
     mov ah, 02h
     int 21h
     loop pDecPrint
