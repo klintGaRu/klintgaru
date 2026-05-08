@@ -1,0 +1,289 @@
+org 100h
+jmp start
+
+; -------------------- MESSAGES --------------------
+msgMenu     db 13,10,'=== Converter ===',13,10
+            db '1. Decimal to Binary',13,10
+            db '2. Binary to Decimal',13,10
+            db '3. Exit',13,10
+            db 'Choice: $'
+
+msgDecIn    db 13,10,'Enter decimal number (0-65535): $'
+msgBinIn    db 13,10,'Enter binary number: $'
+msgInvalid  db 13,10,'Invalid input!',13,10,'$'
+msgResult   db 13,10,'Result: $'
+msgThanks   db 13,10,'Goodbye!',13,10,'$'
+newline     db 13,10,'$'
+
+; DOS buffered input
+choiceBuf   db 3,0,3 dup(0)
+inputBuf    db 20,0,20 dup(0)
+
+; output for binary text
+binBuf      db 17 dup(0)
+binLen      db 0
+
+; IMPORTANT: keep conversion result safe here
+numberVal   dw 0
+
+start:
+    mov ax, cs
+    mov ds, ax
+
+mainMenu:
+    lea dx, msgMenu
+    mov ah, 09h
+    int 21h
+
+    lea dx, choiceBuf
+    mov ah, 0Ah
+    int 21h
+
+    mov al, [choiceBuf+1]
+    cmp al, 1
+    jne badChoice
+
+    mov al, [choiceBuf+2]
+    cmp al, '1'
+    je doDecToBin
+    cmp al, '2'
+    je doBinToDec
+    cmp al, '3'
+    je exitProgram
+
+badChoice:
+    lea dx, msgInvalid
+    mov ah, 09h
+    int 21h
+    jmp mainMenu
+
+; -------------------- DECIMAL TO BINARY --------------------
+doDecToBin:
+    lea dx, msgDecIn
+    mov ah, 09h
+    int 21h
+
+    lea dx, inputBuf
+    mov ah, 0Ah
+    int 21h
+
+    call parseDecimal
+    jc showInvalid
+
+    mov [numberVal], ax        ; save result before any DOS print
+    mov ax, [numberVal]
+    call decimalToBinaryText
+
+    lea dx, msgResult
+    mov ah, 09h
+    int 21h
+
+    mov cl, [binLen]
+    xor ch, ch
+    lea si, binBuf
+
+printBinLoop:
+    cmp cx, 0
+    je donePrintBin
+    mov dl, [si]
+    mov ah, 02h
+    int 21h
+    inc si
+    dec cx
+    jmp printBinLoop
+
+donePrintBin:
+    lea dx, newline
+    mov ah, 09h
+    int 21h
+    jmp mainMenu
+
+; -------------------- BINARY TO DECIMAL --------------------
+doBinToDec:
+    lea dx, msgBinIn
+    mov ah, 09h
+    int 21h
+
+    lea dx, inputBuf
+    mov ah, 0Ah
+    int 21h
+
+    call parseBinary
+    jc showInvalid
+
+    mov [numberVal], ax        ; save immediately (CRITICAL FIX)
+
+    lea dx, msgResult
+    mov ah, 09h
+    int 21h
+
+    mov ax, [numberVal]        ; restore correct value
+    call printAXDecimal
+
+    lea dx, newline
+    mov ah, 09h
+    int 21h
+    jmp mainMenu
+
+showInvalid:
+    lea dx, msgInvalid
+    mov ah, 09h
+    int 21h
+    jmp mainMenu
+
+exitProgram:
+    lea dx, msgThanks
+    mov ah, 09h
+    int 21h
+    mov ax, 4C00h
+    int 21h
+
+; ============================================================
+; parseDecimal
+; OUT: AX=value, CF=0 success, CF=1 fail
+; ============================================================
+parseDecimal:
+    xor ax, ax
+    mov cl, [inputBuf+1]
+    cmp cl, 0
+    je decFail
+    lea si, inputBuf+2
+
+decLoop:
+    mov bl, [si]
+    cmp bl, '0'
+    jb decFail
+    cmp bl, '9'
+    ja decFail
+    sub bl, '0'
+
+    ; AX = AX*10 + BL
+    mov dx, ax
+    shl ax, 1
+    shl dx, 3
+    add ax, dx
+    jc decFail
+    xor bh, bh
+    add ax, bx
+    jc decFail
+
+    inc si
+    dec cl
+    jnz decLoop
+
+    clc
+    ret
+decFail:
+    stc
+    ret
+
+; ============================================================
+; parseBinary (correct)
+; OUT: AX=value, CF=0 success, CF=1 fail
+; ============================================================
+parseBinary:
+    xor ax, ax
+    mov cl, [inputBuf+1]
+    cmp cl, 0
+    je binFail
+    lea si, inputBuf+2
+
+binLoop:
+    mov bl, [si]
+    cmp bl, '0'
+    je bitZero
+    cmp bl, '1'
+    je bitOne
+    jmp binFail
+
+bitZero:
+    test ax, 8000h
+    jnz binFail
+    shl ax, 1
+    jmp nextBit
+
+bitOne:
+    test ax, 8000h
+    jnz binFail
+    shl ax, 1
+    or ax, 1
+
+nextBit:
+    inc si
+    dec cl
+    jnz binLoop
+
+    clc
+    ret
+binFail:
+    stc
+    ret
+
+; ============================================================
+; decimalToBinaryText
+; IN: AX
+; OUT: binBuf + binLen
+; ============================================================
+decimalToBinaryText:
+    cmp ax, 0
+    jne decNotZero
+    mov byte ptr [binBuf], '0'
+    mov byte ptr [binLen], 1
+    ret
+
+decNotZero:
+    xor cx, cx
+
+revLoop:
+    xor dx, dx
+    mov bx, 2
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne revLoop
+
+    lea di, binBuf
+saveLoop:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop saveLoop
+
+    mov ax, di
+    sub ax, offset binBuf
+    mov [binLen], al
+    ret
+
+; ============================================================
+; printAXDecimal
+; IN: AX unsigned
+; ============================================================
+printAXDecimal:
+    cmp ax, 0
+    jne pDecStart
+    mov dl, '0'
+    mov ah, 02h
+    int 21h
+    ret
+
+pDecStart:
+    xor cx, cx
+
+pDecLoop:
+    xor dx, dx
+    mov bx, 10
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne pDecLoop
+
+pDecPrint:
+    pop dx
+    add dl, '0'
+    mov ah, 02h
+    int 21h
+    loop pDecPrint
+    ret
